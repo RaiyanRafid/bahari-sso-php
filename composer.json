@@ -1,0 +1,27 @@
+{
+    "name": "bahari/sso-php",
+    "description": "Bahari Accounts sign-in (OIDC + admin SSO), session refresh, logout and platform APIs for any PHP app. Configure only the issuer and client credentials; everything else is discovered.",
+    "type": "library",
+    "license": "MIT",
+    "keywords": ["bahari", "sso", "oidc", "oauth2"],
+    "require": {
+        "php": "^8.2",
+        "ext-json": "*",
+        "ext-openssl": "*",
+        "firebase/php-jwt": "^6.10 || ^7.0",
+        "psr/simple-cache": "^2.0 || ^3.0"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^11.0 || ^12.0"
+    },
+    "suggest": {
+        "ext-curl": "Used by the default HTTP client."
+    },
+    "autoload": {
+        "psr-4": { "Bahari\\Sso\\": "src/" }
+    },
+    "autoload-dev": {
+        "psr-4": { "Bahari\\Sso\\Tests\\": "tests/" }
+    },
+    "minimum-stability": "stable"
+}
