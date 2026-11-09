@@ -213,4 +213,26 @@ final class ClientTest extends TestCase
         $sent = array_values(array_filter($http->sent, fn (array $r): bool => str_contains($r['url'], 'platform-billing')));
         $this->assertSame('Bearer tok-billing', $sent[0]['headers']['Authorization']);
     }
+
+    public function test_direct_peer_registration_caches_resolve_entries(): void
+    {
+        $http = new FakeHttp([
+            'GET '.self::ISSUER.'/.well-known/bahari-configuration' => FakeHttp::json($this->discovery() + ['api' => ['base_url' => self::ISSUER.'/api/v1', 'platform_navigation' => self::ISSUER.'/api/v1/platform-navigation', 'peer_register_endpoint' => self::ISSUER.'/api/v1/platform-peers/register']]),
+            'POST '.self::ISSUER.'/oauth/token' => FakeHttp::json(['access_token' => 'machine', 'expires_in' => 900]),
+            'POST '.self::ISSUER.'/api/v1/platform-peers/register' => FakeHttp::json(['data' => ['direct_ip' => '161.248.201.33', 'port' => 443, 'hosts' => ['accounts.example.test'], 'ttl' => 1800]]),
+            'GET '.self::ISSUER.'/oauth/jwks' => FakeHttp::json(['keys' => [$this->jwk]]),
+        ]);
+        $this->assertSame([], $this->client($http)->directPeerResolve());
+
+        $direct = new class($http) implements \Bahari\Sso\Http\DirectPeerHttpClient {
+            public array $resolved = [];
+            public function __construct(private readonly FakeHttp $inner) {}
+            public function send(string $method, string $url, array $headers = [], ?string $body = null): \Bahari\Sso\Http\Response { return $this->inner->send($method, $url, $headers, $body); }
+            public function sendWithResolve(string $method, string $url, array $headers = [], ?string $body = null, array $resolve = []): \Bahari\Sso\Http\Response { $this->resolved[] = $resolve; return $this->inner->send($method, $url, $headers, $body); }
+        };
+        $client = new Client(Config::fromArray(['issuer' => self::ISSUER, 'client_id' => 'client-1', 'client_secret' => 'secret-1', 'platform' => 'reseller']), $direct, new ArrayCache, 'bahari/sso-php/0.4.1');
+        $this->assertSame(['accounts.example.test:443:161.248.201.33'], $client->directPeerResolve());
+        $client->jwks();
+        $this->assertSame([['accounts.example.test:443:161.248.201.33']], $direct->resolved);
+    }
 }

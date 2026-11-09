@@ -7,6 +7,7 @@ use Bahari\Sso\Exception\AccessDeniedException;
 use Bahari\Sso\Exception\BahariException;
 use Bahari\Sso\Exception\HttpException;
 use Bahari\Sso\Http\CurlHttpClient;
+use Bahari\Sso\Http\DirectPeerHttpClient;
 use Bahari\Sso\Http\HttpClient;
 use Bahari\Sso\Http\Response;
 use Closure;
@@ -29,6 +30,8 @@ class Client
     private ?string $sdkStatus = null;
 
     private ?TokenVerifier $verifier = null;
+
+    private bool $resolvingPeer = false;
 
     /**
      * @param  string  $sdk  Sent as X-Bahari-SDK so Bahari can tell you when the package is outdated.
@@ -442,15 +445,104 @@ class Client
         return $this->send('POST', $url, ['Content-Type' => 'application/x-www-form-urlencoded'], http_build_query($data), true);
     }
 
+    /**
+     * Automatically registers this server's egress IP with Bahari Accounts and caches the returned
+     * direct-peer resolution entries ("host:port:ip") so subsequent API calls bypass Cloudflare Tunnel.
+     *
+     * @return list<string>
+     */
+    public function directPeerResolve(): array
+    {
+        if (! $this->http instanceof DirectPeerHttpClient || (method_exists($this->http, 'supportsDirectPeer') && ! $this->http->supportsDirectPeer()) || ! $this->config->configured() || $this->resolvingPeer) {
+            return [];
+        }
+        $key = $this->peerCacheKey();
+        $cached = $this->cache->get($key);
+        if (is_array($cached) && is_array($cached['resolve'] ?? null)) {
+            return $cached['resolve'];
+        }
+        $this->resolvingPeer = true;
+        try {
+            $token = $this->machineToken('identity:lookup');
+            $endpoint = $this->discovery()->get('api.peer_register_endpoint') ?: rtrim($this->config->issuer, '/').'/api/v1/platform-peers/register';
+            $response = $this->http->send('POST', (string) $endpoint, [
+                'Authorization' => 'Bearer '.$token,
+                'Accept' => 'application/json',
+                'X-Bahari-SDK' => $this->sdk,
+            ]);
+            if ($response->successful()) {
+                $data = $response->json('data');
+                $directIp = is_array($data) ? ($data['direct_ip'] ?? null) : null;
+                $port = is_array($data) ? (int) ($data['port'] ?? 443) : 443;
+                $hosts = is_array($data) && is_array($data['hosts'] ?? null) ? $data['hosts'] : [];
+                $ttl = is_array($data) ? max(60, min(1800, (int) ($data['ttl'] ?? 1800))) : 1800;
+                $entries = [];
+                if (is_string($directIp) && filter_var($directIp, FILTER_VALIDATE_IP) && $port > 0 && $port <= 65535) {
+                    foreach ($hosts as $host) {
+                        if (is_string($host) && $host !== '' && ! str_contains($host, ':')) {
+                            $entries[] = "{$host}:{$port}:{$directIp}";
+                        }
+                    }
+                }
+                if ($entries !== []) {
+                    $this->cache->set($key, ['resolve' => $entries], $ttl);
+
+                    return $entries;
+                }
+            }
+        } catch (Throwable) {
+            // Gracefully fall back to standard DNS (Cloudflare) when peer bypass is unavailable.
+        } finally {
+            $this->resolvingPeer = false;
+        }
+        $this->cache->set($key, ['resolve' => []], 300);
+
+        return [];
+    }
+
+    private function peerCacheKey(): string
+    {
+        return 'bahari:direct_peer:'.hash('sha256', $this->config->issuer." ".$this->config->clientId);
+    }
+
     private function send(string $method, string $url, array $headers = [], ?string $body = null, bool $throw = false): Response
     {
-        $response = $this->http->send($method, $url, $headers + ['Accept' => 'application/json', 'X-Bahari-SDK' => $this->sdk], $body);
+        $mergedHeaders = $headers + ['Accept' => 'application/json', 'X-Bahari-SDK' => $this->sdk];
+        $resolve = $this->peerResolveEntriesFor($url);
+        if ($resolve !== [] && $this->http instanceof DirectPeerHttpClient) {
+            try {
+                $response = $this->http->sendWithResolve($method, $url, $mergedHeaders, $body, $resolve);
+            } catch (BahariException) {
+                $this->cache->set($this->peerCacheKey(), ['resolve' => []], 60);
+                $response = $this->http->send($method, $url, $mergedHeaders, $body);
+            }
+        } else {
+            $response = $this->http->send($method, $url, $mergedHeaders, $body);
+        }
         $this->sdkStatus = $response->header('X-Bahari-SDK-Status') ?? $this->sdkStatus;
         if ($throw && ! $response->successful()) {
             throw new HttpException($response, $url);
         }
 
         return $response;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function peerResolveEntriesFor(string $url): array
+    {
+        if ($this->resolvingPeer || ! $this->http instanceof DirectPeerHttpClient || ! $this->config->configured()) {
+            return [];
+        }
+        $host = parse_url($url, PHP_URL_HOST);
+        $issuerHost = parse_url($this->config->issuer, PHP_URL_HOST);
+        $adminHost = $this->config->adminIssuer ? parse_url($this->config->adminIssuer, PHP_URL_HOST) : null;
+        if (! is_string($host) || ! in_array($host, array_filter([$issuerHost, $adminHost]), true)) {
+            return [];
+        }
+
+        return $this->directPeerResolve();
     }
 
     private function checkIdentity(array $profile): void
