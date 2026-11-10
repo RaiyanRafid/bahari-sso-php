@@ -282,9 +282,36 @@ class Client
         return $query === [] ? $url : $url.(str_contains($url, '?') ? '&' : '?').http_build_query($query);
     }
 
-    public function walletUrl(?string $returnTo = null): string
+    public function walletUrl(?string $returnTo = null, ?string $amount = null): string
     {
-        return $this->url('client.wallet_url', array_filter(['platform' => $this->config->platform, 'return_to' => $returnTo]));
+        return $this->url('client.wallet_url', array_filter(['platform' => $this->config->platform, 'return_to' => $returnTo, 'amount' => $amount]));
+    }
+
+    /**
+     * Available payment gateways and minimum deposit amounts for an external wallet account.
+     */
+    public function checkoutOptions(string $externalUserId): array
+    {
+        return $this->api('GET', 'platform-wallets/'.rawurlencode($externalUserId).'/checkout-options', [], 'wallet:read');
+    }
+
+    /**
+     * Generates an official "Add Funds Deposit" Invoice for an external wallet account and returns data.checkout_url.
+     * Omit "provider" to send the user to the official Bahari Invoice Checkout screen, or pass "bkash"/"sslcommerz".
+     *
+     * @param  array{reference: string, amount: string, return_to: string, provider?: string|null}  $topUp
+     */
+    public function startTopUp(string $externalUserId, array $topUp): array
+    {
+        return $this->api('POST', 'platform-wallets/'.rawurlencode($externalUserId).'/top-ups', $topUp, 'wallet:debit');
+    }
+
+    /**
+     * Looks up the authoritative status and wallet balance for a top-up reference.
+     */
+    public function topUp(string $externalUserId, string $reference): array
+    {
+        return $this->api('GET', 'platform-wallets/'.rawurlencode($externalUserId).'/top-ups/'.rawurlencode($reference), [], 'wallet:read');
     }
 
     /**
