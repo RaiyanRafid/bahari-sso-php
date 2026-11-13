@@ -41,6 +41,19 @@ Pass your framework's PSR-16 cache and, for cached machine tokens, `seal`/`unsea
 `Bahari\Sso\Http\HttpClient` to use another HTTP client.
 
 
+## Roles, maintenance and branding (0.5.0)
+
+```php
+$bahari->role($identity);      // 'SUPER_ADMIN', 'ADMIN' or 'USER'
+$bahari->isAdmin($identity);   // true only for an admin session of this app
+$bahari->maintenance();        // ['enabled' => bool, 'message' => ?string] — show a banner
+$bahari->branding();           // logos, favicon, brand colour, access mode and support contact
+Client::linkedUserId($identity); // the account a back-channel logout names (customer subject or admin user_id)
+```
+
+When a back-channel logout arrives, end the customer sessions whose subject is `sub` and the admin sessions whose
+profile `user_id` is `sub`. Bahari sends it when someone loses access to the app.
+
 ## No local authentication
 
 The app has no sign-in of its own. Bahari Accounts does sign-in, registration, passwords, password reset,

@@ -158,6 +158,82 @@ class Client
     }
 
     /**
+     * The person's role in this app, as Bahari decides it from the platform's Access & RBAC settings: SUPER_ADMIN,
+     * ADMIN or USER. Admin sessions always carry their role; a customer session is USER unless Bahari reports admin
+     * access to this platform (then pass them on to admin sign-in).
+     */
+    public function role(Identity $identity): string
+    {
+        $role = $identity->kind === 'admin' ? ($identity->profile['role'] ?? 'ADMIN') : ($this->adminAccess($identity)['role'] ?? 'USER');
+
+        return in_array($role, ['SUPER_ADMIN', 'ADMIN', 'USER'], true) ? $role : 'USER';
+    }
+
+    /** True for an administrator session of this app (not for a customer who merely could become one). */
+    public function isAdmin(Identity $identity): bool
+    {
+        return $identity->kind === 'admin' && in_array($this->role($identity), ['ADMIN', 'SUPER_ADMIN'], true);
+    }
+
+    /**
+     * The Bahari account a back-channel logout is about: the customer subject itself, and the linked user of admin
+     * sessions. Apps end every session (customer and admin) whose subject or profile user_id equals it.
+     */
+    public static function linkedUserId(Identity $identity): string
+    {
+        return $identity->kind === 'admin' ? (string) ($identity->profile['user_id'] ?? '') : $identity->subject;
+    }
+
+    /**
+     * The app's branding, access mode, maintenance state and support contact as set in Bahari (Connected apps ›
+     * Branding / Access). Public, cached for $ttl seconds; the last good copy is used when Bahari cannot be reached.
+     *
+     * @return array{name: ?string, access_mode: string, logo_url: ?string, logo_light_url: ?string, logo_dark_url: ?string, favicon_url: ?string, brand_color: ?string, maintenance: array{enabled: bool, message: ?string}, support: array{email: ?string, phone: ?string, url: ?string}}
+     */
+    public function branding(?string $platform = null, int $ttl = 60): array
+    {
+        $platform ??= $this->config->platform;
+        if (! is_string($platform) || ! preg_match('/^[a-z0-9_-]{1,80}$/D', $platform)) {
+            throw new Exception\BahariException('Set the platform key (BAHARI_PLATFORM_KEY) to read branding.');
+        }
+        $defaults = ['name' => null, 'access_mode' => 'hybrid', 'logo_url' => null, 'logo_light_url' => null, 'logo_dark_url' => null, 'favicon_url' => null, 'brand_color' => null,
+            'maintenance' => ['enabled' => false, 'message' => null], 'support' => ['email' => null, 'phone' => null, 'url' => null]];
+        $key = 'bahari:branding:'.hash('sha256', $this->config->issuer.'|'.$platform);
+        $cached = $this->cache->get($key);
+        if (is_array($cached)) {
+            return array_replace($defaults, $cached);
+        }
+        $template = $this->discovery()->get('api.platform_branding') ?: $this->config->issuer.'/api/v1/platform-branding/{key}';
+        try {
+            $data = $this->send('GET', str_replace('{key}', rawurlencode($platform), (string) $template), [], null, true)->json('data');
+            if (is_array($data)) {
+                $this->cache->set($key, $data, max(1, $ttl));
+                $this->cache->set($key.':last-good', $data, 604800);
+
+                return array_replace($defaults, $data);
+            }
+        } catch (Throwable) {
+            // Fall back to the last good copy.
+        }
+        $last = $this->cache->get($key.':last-good');
+
+        return array_replace($defaults, is_array($last) ? $last : []);
+    }
+
+    /**
+     * Whether Bahari has this app in maintenance mode, with the message for customers. Show it as a banner; new
+     * sign-ins are already stopped by Bahari (super admins can still sign in).
+     *
+     * @return array{enabled: bool, message: ?string}
+     */
+    public function maintenance(?string $platform = null): array
+    {
+        $maintenance = $this->branding($platform)['maintenance'] ?? [];
+
+        return ['enabled' => (bool) ($maintenance['enabled'] ?? false), 'message' => is_string($maintenance['message'] ?? null) ? $maintenance['message'] : null];
+    }
+
+    /**
      * Re-checks a stored session with Bahari (call on each request or every few minutes). Client access tokens are
      * rotated when they expire within 30 seconds; store the returned tokens when tokensChanged is true.
      *

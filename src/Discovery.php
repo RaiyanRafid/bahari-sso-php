@@ -36,7 +36,7 @@ final class Discovery
                 'origin' => $admin, 'panel_url' => $admin.'/admin', 'billing_url' => $admin.'/admin/billing', 'profile_url' => $admin.'/admin/profile', 'authorize_endpoint' => $admin.'/admin-sso/authorize',
                 'exchange_endpoint' => $api.'/admin-sso/exchange', 'session_endpoint' => $api.'/admin-sso/session', 'revoke_endpoint' => $api.'/admin-sso/revoke', 'navigation_endpoint' => $api.'/admin-sso/navigation',
             ],
-            'api' => ['base_url' => $api, 'platform_navigation' => $api.'/platform-navigation', 'peer_register_endpoint' => $api.'/platform-peers/register'],
+            'api' => ['base_url' => $api, 'platform_navigation' => $api.'/platform-navigation', 'peer_register_endpoint' => $api.'/platform-peers/register', 'platform_branding' => $api.'/platform-branding/{key}'],
             'sdk' => ['packages' => []],
         ], false);
     }

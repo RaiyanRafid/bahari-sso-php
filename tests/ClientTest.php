@@ -235,4 +235,39 @@ final class ClientTest extends TestCase
         $client->jwks();
         $this->assertSame([['accounts.example.test:443:161.248.201.33']], $direct->resolved);
     }
+
+    public function test_branding_and_maintenance_are_read_cached_and_fall_back_to_the_last_good_copy(): void
+    {
+        $cache = new ArrayCache;
+        $branding = ['name' => 'Bahari Reseller', 'access_mode' => 'hybrid', 'logo_url' => self::ISSUER.'/branding/assets/1', 'brand_color' => '#0EA5E9',
+            'maintenance' => ['enabled' => true, 'message' => 'Back by 3 PM.'], 'support' => ['email' => 'help@reseller.test', 'phone' => null, 'url' => null]];
+        $http = new FakeHttp([
+            'GET '.self::ISSUER.'/.well-known/bahari-configuration' => FakeHttp::json($this->discovery() + ['api' => []]),
+            'GET '.self::ISSUER.'/api/v1/platform-branding/reseller' => FakeHttp::json(['data' => $branding]),
+        ]);
+        $client = $this->client($http, $cache);
+
+        $this->assertSame('Bahari Reseller', $client->branding()['name']);
+        $this->assertSame(['enabled' => true, 'message' => 'Back by 3 PM.'], $client->maintenance());
+        $this->assertSame('help@reseller.test', $client->branding()['support']['email']);
+        $this->assertCount(2, $http->sent, 'Branding is cached.');
+
+        $offline = new FakeHttp(['GET '.self::ISSUER.'/.well-known/bahari-configuration' => FakeHttp::json($this->discovery())]);
+        $cache->delete('bahari:branding:'.hash('sha256', self::ISSUER.'|reseller'));
+        $this->assertTrue($this->client($offline, $cache)->maintenance()['enabled'], 'The last good copy is used when Bahari cannot be reached.');
+        $this->assertSame(['enabled' => false, 'message' => null], $this->client($offline, new ArrayCache)->maintenance());
+    }
+
+    public function test_role_reports_admin_rights_from_bahari(): void
+    {
+        $client = $this->client(new FakeHttp);
+        $customer = new \Bahari\Sso\Identity('client', self::SUBJECT, [], $this->profile());
+        $wouldBeAdmin = new \Bahari\Sso\Identity('client', self::SUBJECT, [], $this->profile(['admin_access' => ['platform' => 'reseller', 'role' => 'ADMIN', 'two_factor_ready' => true]]));
+        $otherPlatform = new \Bahari\Sso\Identity('client', self::SUBJECT, [], $this->profile(['admin_access' => ['platform' => 'sms', 'role' => 'SUPER_ADMIN', 'two_factor_ready' => true]]));
+        $admin = new \Bahari\Sso\Identity('admin', 'admin-1', [], ['id' => 'admin-1', 'user_id' => self::SUBJECT, 'role' => 'SUPER_ADMIN']);
+
+        $this->assertSame(['USER', 'ADMIN', 'USER', 'SUPER_ADMIN'], [$client->role($customer), $client->role($wouldBeAdmin), $client->role($otherPlatform), $client->role($admin)]);
+        $this->assertSame([false, false, true], [$client->isAdmin($customer), $client->isAdmin($wouldBeAdmin), $client->isAdmin($admin)]);
+        $this->assertSame([self::SUBJECT, self::SUBJECT], [Client::linkedUserId($customer), Client::linkedUserId($admin)]);
+    }
 }
